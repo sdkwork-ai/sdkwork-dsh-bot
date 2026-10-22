@@ -95,16 +95,19 @@ export function hostModeClose(layout: unknown): (() => void) | undefined {
 /**
  * Whether the host frame declares both mode seats this module contributes into.
  *
- * A declared slot is the contract: the host's slots service answers a declared
- * spec and nothing for a key it never declared, while an older service has no
- * lookup at all. Both answers mean "this host has no app modes", which keeps the
- * pre-mode composition the only one registered there.
+ * The authority is the layout service, not the slots table: a mode frame is the
+ * one whose layout exposes `openPanel` (a code-surface overlay) or `setMode` (a
+ * rail mode), and this module only contributes where one of them exists. The
+ * slots service is asked only when it publishes a declaration lookup — the
+ * browser-side service does not, and treating "no lookup" as "no app modes"
+ * made a real mode frame fall back to the pre-mode composition.
  * @param ctx - the client root context.
- * @returns true when `mode.page` and `mode.rail.panel` are both declared.
+ * @returns true when the seats are declared, or when the host publishes no way
+ *   to ask and the layout service alone decides.
  */
 export function hostModeSeatsDeclared(ctx: { slots: unknown }): boolean {
   const slots = ctx.slots as { specDynamic?: (key: string) => unknown };
-  if (typeof slots.specDynamic !== 'function') return false;
+  if (typeof slots.specDynamic !== 'function') return true;
   return slots.specDynamic('mode.page') !== undefined
     && slots.specDynamic('mode.rail.panel') !== undefined;
 }
