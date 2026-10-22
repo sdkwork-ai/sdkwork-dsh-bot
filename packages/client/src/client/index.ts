@@ -87,6 +87,7 @@ import { TelemetryNoticeController } from './telemetry-notice.js';
 import './bot-settings-slot.js';
 import { BotMain } from './bot-main.js';
 import { expectMobileConversation, MobileBotPanel } from './mobile-bot-panel.js';
+import { HOST_MODE_ID, hostModeSwitch, registerHostMode } from './host-mode.js';
 import { mobileBotViewport, subscribeMobileBotViewport } from './mobile-viewport.js';
 import { clearConversationDrafts } from './conversation-draft.js';
 import { BotSidebar, createBotPanelEntry } from './bot-sidebar.js';
@@ -1081,31 +1082,46 @@ export function apply(ctx: ClientContext): void {
     ),
   );
 
+  // The Bot faces, shared by both compositions: the pre-mode main panel below
+  // and the mode-based host frame's page (`host-mode.tsx`). One object so the
+  // surface cannot drift between them.
+  const botFaces = {
+    actions,
+    companion,
+    channelSidebar,
+    dockPanels,
+    profileCards,
+    appearance,
+    wallpaper,
+    nativeChatT,
+    nativeSessions,
+    prefs,
+    releaseNotes,
+    telemetryNotice,
+    workspace,
+    ...botModePrefsFace(prefs),
+    exitBotMode: () => ctx.layout.selectPanel(null),
+    openBotSettings: (sectionId?: string) => botSettings.open(sectionId),
+    quickSwitcherSettings,
+  };
+
+  // SDKWork BirdCoder frame: contribute the Bot as an app mode — one rail
+  // shortcut plus the keyed mode page. Inert on a host that declares neither
+  // seat, which keeps the upstream composition below intact.
+  const hostHasModes = registerHostMode(ctx, botFaces, LOCALE_NS);
+
   ctx.slots.inject('main', () => {
+    // A mode-based host renders the Bot in its mode page. Registering the panel
+    // there as well would give the same surface two homes and put the code
+    // sidebar beside a surface designed to own the frame; pre-mode hosts keep
+    // the panel.
+    if (hostHasModes) return () => {};
     const dispose = ctx.slots.register(
       {
         name: 'main',
         key: PANEL_ID,
         locale: LOCALE_NS,
-        inject: () => ({
-          actions,
-          companion,
-          channelSidebar,
-          dockPanels,
-          profileCards,
-          appearance,
-          wallpaper,
-          nativeChatT,
-          nativeSessions,
-          prefs,
-          releaseNotes,
-          telemetryNotice,
-          workspace,
-          ...botModePrefsFace(prefs),
-          exitBotMode: () => ctx.layout.selectPanel(null),
-          openBotSettings: (sectionId?: string) => botSettings.open(sectionId),
-          quickSwitcherSettings,
-        }),
+        inject: () => botFaces,
       },
       MobileBotPanel,
     );
@@ -1123,6 +1139,20 @@ export function apply(ctx: ClientContext): void {
     }
     return dispose;
   });
+
+  if (hostHasModes && restoreBotMode) {
+    // Restoring on a mode-based host selects the mode page, not the panel:
+    // selecting the panel there would reopen the code surface instead.
+    restoreBotMode = false;
+    const setMode = hostModeSwitch(ctx.layout);
+    queueMicrotask(() => {
+      try {
+        setMode?.(HOST_MODE_ID);
+      } catch (error) {
+        ctx.logger.warn('botharness: failed to restore Bot mode', error);
+      }
+    });
+  }
 
   const resolveSessionOwner = (sessionId: string, signal: AbortSignal) =>
     loadSessionBotOwner(call, sessionId, signal);
