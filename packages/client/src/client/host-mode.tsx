@@ -25,7 +25,7 @@
 import { createElement, type CSSProperties, type ReactElement } from 'react';
 import { BOT_GLYPH_SVG } from './bot-icon.js';
 import { HostFrameContext } from './host-frame.js';
-import { MobileBotPanel } from './mobile-bot-panel.js';
+import { BotPanel } from './bot-main.js';
 
 /**
  * Mode id and rail-shortcut id the Bot surface occupies. One string for both:
@@ -38,7 +38,7 @@ export const HOST_MODE_ID = 'botharness';
 const HOST_MODE_RAIL_ORDER = 20;
 
 /** Bot panel props the host frame hands to the surface, minus the mobile back path. */
-export type BotModeFaces = Parameters<typeof MobileBotPanel>[0];
+export type BotModeFaces = Parameters<typeof BotPanel>[0];
 
 /**
  * The frame's seat API. The host declares `mode.page` and `mode.rail.panel`; the
@@ -109,7 +109,14 @@ export function hostModeSeatsDeclared(ctx: { slots: unknown }): boolean {
     && slots.specDynamic('mode.rail.panel') !== undefined;
 }
 
-/** Page frame: the center column's height, no scroll, no outer chrome. */
+/**
+ * Page frame: the center column's full box, no scroll, no outer chrome.
+ *
+ * `width`/`height: 100%` plus `position: relative` make this element the
+ * containing block for the surface: the Bot layout anchors absolute children
+ * (topbar, panels) to it instead of to the frame, and a host that renders the
+ * page through a content-sized wrapper still gets a full-size surface.
+ */
 const pageStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
@@ -118,6 +125,8 @@ const pageStyle: CSSProperties = {
   minHeight: 0,
   minWidth: 0,
   overflow: 'hidden',
+  position: 'relative',
+  width: '100%',
 };
 
 /** Rail cell: one square shortcut in the host rail's foot cluster. */
@@ -150,7 +159,7 @@ function railButtonStyle(active: boolean): CSSProperties {
 export function BotModePage(props: BotModeFaces): ReactElement {
   return createElement(HostFrameContext.Provider, { value: true },
     createElement('div', { style: pageStyle, 'data-botharness-mode-page': '' },
-      createElement(MobileBotPanel, props)));
+      createElement(BotPanel, props)));
 }
 
 /** The shortcut's own facts, injected at registration. */

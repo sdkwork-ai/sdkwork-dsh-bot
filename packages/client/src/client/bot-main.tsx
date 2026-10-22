@@ -1047,9 +1047,11 @@ function ConversationView({
 }): ReactElement {
   const sidebar = useChannelSidebar(state);
   // A host frame (SDKWork BirdCoder) owns navigation with its standard sidebar;
-  // the surface's own channel sidebar would be a second one beside it.
+  // the surface's own channel sidebar would be a second one beside it, so the
+  // host composition renders the chat pane alone (both docked and overlay forms
+  // are skipped below).
   const hostFrame = useHostFrame();
-  const docked = useChannelDockActive() || hostFrame;
+  const docked = useChannelDockActive() && !hostFrame;
   const workspaceEnabled = useContext(WorkspaceContext) !== undefined;
   const [detail, setDetail] = useScopedState<'files' | 'inbox' | undefined>(
     scopeKey,
@@ -3445,7 +3447,7 @@ function ConversationView({
         </GeneratedFilesContext.Provider>
         <ChannelSettingsDialog registry={channelSidebar} state={state} actions={actions} t={t} />
         <ChannelSettingsAttention registry={channelSidebar} state={state} actions={actions} t={t} />
-        {docked ? null : (
+        {docked || hostFrame ? null : (
           <>
             <ChannelSidebar
               registry={channelSidebar}
