@@ -1218,6 +1218,12 @@ export function apply(ctx: ClientContext): void {
     ),
   );
 
+  // The pre-mode composition also SHADOWS the host chrome while Bot mode is on:
+  // its own sidebar, its sidebar content, and the conversation main panel. A
+  // host frame keeps its standard sidebar beside the Bot page, so none of those
+  // shadows may install there — that is what kept replacing the frame's sidebar
+  // with the plugin's own.
+  if (!hostHasModes) {
   registerModeShadow(
     ctx,
     'sidebar',
@@ -1299,6 +1305,7 @@ export function apply(ctx: ClientContext): void {
       ),
     store,
   );
+  }
 
   const mention: InputTriggerSource = {
     trigger: '@',
