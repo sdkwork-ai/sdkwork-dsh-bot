@@ -87,7 +87,7 @@ import { TelemetryNoticeController } from './telemetry-notice.js';
 import './bot-settings-slot.js';
 import { BotMain } from './bot-main.js';
 import { expectMobileConversation, MobileBotPanel } from './mobile-bot-panel.js';
-import { HOST_MODE_ID, hostModeSwitch, registerHostMode } from './host-mode.js';
+import { HOST_MODE_ID, hostModeClose, hostModeOpen, hostModeSwitch, registerHostMode } from './host-mode.js';
 import { mobileBotViewport, subscribeMobileBotViewport } from './mobile-viewport.js';
 import { clearConversationDrafts } from './conversation-draft.js';
 import { BotSidebar, createBotPanelEntry } from './bot-sidebar.js';
@@ -1049,6 +1049,20 @@ export function apply(ctx: ClientContext): void {
     };
   });
 
+  // The Bot surface has one entry point per host composition. A panel-mode host
+  // (SDKWork BirdCoder) opens it as a code-surface overlay so its standard
+  // sidebar stays beside the page; a pre-mode host selects the main panel.
+  const openHostSurface = hostModeOpen(ctx.layout);
+  const closeHostSurface = hostModeClose(ctx.layout);
+  const openBotSurface = (): void => {
+    if (openHostSurface !== undefined) openHostSurface(HOST_MODE_ID);
+    else ctx.layout.selectPanel(PANEL_ID);
+  };
+  const closeBotSurface = (): void => {
+    if (closeHostSurface !== undefined) closeHostSurface();
+    else ctx.layout.selectPanel(null);
+  };
+
   ctx.slots.inject('sidebar.panellist', () =>
     ctx.slots.register(
       {
@@ -1066,10 +1080,10 @@ export function apply(ctx: ClientContext): void {
       },
       createBotPanelEntry(
         () => {
-          ctx.layout.selectPanel(null);
+          closeBotSurface();
         },
         () => {
-          ctx.layout.selectPanel(PANEL_ID);
+          openBotSurface();
           void actions.openActivityCenter();
         },
         () => actions.refreshHumanInboxStatus(),
@@ -1100,14 +1114,15 @@ export function apply(ctx: ClientContext): void {
     telemetryNotice,
     workspace,
     ...botModePrefsFace(prefs),
-    exitBotMode: () => ctx.layout.selectPanel(null),
+    exitBotMode: closeBotSurface,
     openBotSettings: (sectionId?: string) => botSettings.open(sectionId),
     quickSwitcherSettings,
   };
 
-  // SDKWork BirdCoder frame: contribute the Bot as an app mode — one rail
-  // shortcut plus the keyed mode page. Inert on a host that declares neither
-  // seat, which keeps the upstream composition below intact.
+  // SDKWork BirdCoder frame: contribute the Bot as a host surface — a keyed
+  // `mode.page` a panel-mode host opens beside its standard sidebar (and the
+  // keyed page content itself). Inert on a host that declares neither seat,
+  // which keeps the upstream composition below intact.
   const hostHasModes = registerHostMode(ctx, botFaces, LOCALE_NS);
 
   ctx.slots.inject('main', () => {
@@ -1141,13 +1156,14 @@ export function apply(ctx: ClientContext): void {
   });
 
   if (hostHasModes && restoreBotMode) {
-    // Restoring on a mode-based host selects the mode page, not the panel:
-    // selecting the panel there would reopen the code surface instead.
+    // Restoring on a host frame reopens the overlay (or the rail mode), not the
+    // panel: selecting the panel there would reopen the code surface instead.
     restoreBotMode = false;
     const setMode = hostModeSwitch(ctx.layout);
     queueMicrotask(() => {
       try {
-        setMode?.(HOST_MODE_ID);
+        if (openHostSurface !== undefined) openHostSurface(HOST_MODE_ID);
+        else setMode?.(HOST_MODE_ID);
       } catch (error) {
         ctx.logger.warn('botharness: failed to restore Bot mode', error);
       }
@@ -1160,7 +1176,7 @@ export function apply(ctx: ClientContext): void {
     if (!store.getSnapshot().bots.some((bot) => bot.slug === slug)) await actions.load();
     if (!store.getSnapshot().bots.some((bot) => bot.slug === slug))
       throw new Error('PersonaBot is unavailable');
-    ctx.layout.selectPanel(PANEL_ID);
+    openBotSurface();
     await actions.openBot(slug);
   };
   ctx.slots.inject('conversation.session.header.actions', () =>

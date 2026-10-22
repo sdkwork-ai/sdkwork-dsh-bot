@@ -24,6 +24,7 @@
  */
 import { createElement, type CSSProperties, type ReactElement } from 'react';
 import { BOT_GLYPH_SVG } from './bot-icon.js';
+import { HostFrameContext } from './host-frame.js';
 import { MobileBotPanel } from './mobile-bot-panel.js';
 
 /**
@@ -52,6 +53,8 @@ interface HostModeSeats {
 /** The layout service's mode switch, present only on a mode-based host frame. */
 interface HostModeSwitch {
   setMode?: ((mode: string) => void) | undefined;
+  openPanel?: ((mode: string) => void) | undefined;
+  closePanel?: (() => void) | undefined;
 }
 
 /**
@@ -61,6 +64,31 @@ interface HostModeSwitch {
  */
 export function hostModeSwitch(layout: unknown): HostModeSwitch['setMode'] {
   const candidate = (layout as HostModeSwitch | undefined)?.setMode;
+  return typeof candidate === 'function' ? candidate.bind(layout) : undefined;
+}
+
+/**
+ * The host's code-surface overlay opener, when the frame has one.
+ *
+ * A panel-mode host renders the surface beside its standard sidebar, so the Bot
+ * opens through `openPanel` rather than as a rail mode; the sidebar keeps the
+ * frame's normal navigation and the page never draws its own. Falls back to
+ * `setMode` for a host that only knows rail modes.
+ * @param layout - the client layout service.
+ * @returns the opener, or undefined on a host without code-surface overlays.
+ */
+export function hostModeOpen(layout: unknown): ((mode: string) => void) | undefined {
+  const candidate = (layout as HostModeSwitch | undefined)?.openPanel;
+  return typeof candidate === 'function' ? candidate.bind(layout) : undefined;
+}
+
+/**
+ * The host's code-surface overlay closer, when the frame has one.
+ * @param layout - the client layout service.
+ * @returns the closer, or undefined on a host without code-surface overlays.
+ */
+export function hostModeClose(layout: unknown): (() => void) | undefined {
+  const candidate = (layout as HostModeSwitch | undefined)?.closePanel;
   return typeof candidate === 'function' ? candidate.bind(layout) : undefined;
 }
 
@@ -112,12 +140,17 @@ function railButtonStyle(active: boolean): CSSProperties {
 
 /**
  * Render the Bot surface in the host frame's center column.
+ *
+ * The host frame owns the surrounding chrome — its standard sidebar is mounted
+ * by the frame, not by this page — so the surface renders without its own
+ * channel sidebar (see `host-frame.ts`).
  * @param props - the Bot faces the host passes through, plus the surface's own props.
  * @returns the page frame around the Bot surface.
  */
 export function BotModePage(props: BotModeFaces): ReactElement {
-  return createElement('div', { style: pageStyle, 'data-botharness-mode-page': '' },
-    createElement(MobileBotPanel, props));
+  return createElement(HostFrameContext.Provider, { value: true },
+    createElement('div', { style: pageStyle, 'data-botharness-mode-page': '' },
+      createElement(MobileBotPanel, props)));
 }
 
 /** The shortcut's own facts, injected at registration. */
@@ -150,10 +183,12 @@ export function BotModeRailEntry(
 /**
  * Contribute the Bot surface to a mode-based host frame.
  *
- * Both registrations are inert until the host declares their seat, so a host
- * without app modes keeps the pre-mode composition this plugin already
- * registers. A mode-based host renders only this page, because nothing selects
- * the main panel there any more.
+ * The page registration is what a panel-mode host needs: the standard sidebar
+ * opens it through `openPanel`, and the frame renders the page beside that
+ * sidebar. A host that only knows rail modes additionally gets the rail
+ * shortcut, so the surface stays reachable there. Both registrations are inert
+ * until the host declares their seat, so a host without app modes keeps the
+ * pre-mode composition this plugin already registers.
  * @param ctx - the client root context.
  * @param faces - the Bot faces the surface renders from.
  * @param localeNamespace - the plugin's locale namespace, so the surface keeps
@@ -167,7 +202,8 @@ export function registerHostMode<T extends object>(
   localeNamespace: string,
 ): boolean {
   const setMode = hostModeSwitch(ctx.layout);
-  if (setMode === undefined || !hostModeSeatsDeclared(ctx)) return false;
+  const openPanel = hostModeOpen(ctx.layout);
+  if ((setMode === undefined && openPanel === undefined) || !hostModeSeatsDeclared(ctx)) return false;
   const seats = ctx.slots as HostModeSeats;
   seats.inject('mode.page', () => seats.register({
     name: 'mode.page',
@@ -176,13 +212,15 @@ export function registerHostMode<T extends object>(
     // The host merges the locale share into these faces at render time.
     inject: () => faces as unknown as Record<string, unknown>,
   }, BotModePage));
-  seats.inject('mode.rail.panel', () => seats.register({
-    name: 'mode.rail.panel',
-    id: HOST_MODE_ID,
-    order: HOST_MODE_RAIL_ORDER,
-    inject: (): BotModeRailEntryInjected => ({
-      select: () => { setMode(HOST_MODE_ID); },
-    }),
-  }, BotModeRailEntry));
+  if (openPanel === undefined) {
+    seats.inject('mode.rail.panel', () => seats.register({
+      name: 'mode.rail.panel',
+      id: HOST_MODE_ID,
+      order: HOST_MODE_RAIL_ORDER,
+      inject: (): BotModeRailEntryInjected => ({
+        select: () => { setMode?.(HOST_MODE_ID); },
+      }),
+    }, BotModeRailEntry));
+  }
   return true;
 }

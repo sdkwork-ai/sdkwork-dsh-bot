@@ -6,6 +6,7 @@ import { useScopedRef, useScopedState } from './scoped-state.js';
 import { PanelEmptyState } from './ds/empty-state.js';
 import { Workspace, type WorkspaceOptions } from './workspace.js';
 import { WorkspaceContext } from './workspace-context.js';
+import { useHostFrame } from './host-frame.js';
 import { OnboardingMemoryNavigation } from './onboarding-memory.js';
 import { OnboardingOverlay } from './onboarding-view.js';
 import { BotIntro } from './bot-intro.js';
@@ -1045,7 +1046,10 @@ function ConversationView({
   t: BotHarnessTranslate;
 }): ReactElement {
   const sidebar = useChannelSidebar(state);
-  const docked = useChannelDockActive();
+  // A host frame (SDKWork BirdCoder) owns navigation with its standard sidebar;
+  // the surface's own channel sidebar would be a second one beside it.
+  const hostFrame = useHostFrame();
+  const docked = useChannelDockActive() || hostFrame;
   const workspaceEnabled = useContext(WorkspaceContext) !== undefined;
   const [detail, setDetail] = useScopedState<'files' | 'inbox' | undefined>(
     scopeKey,
