@@ -87,7 +87,7 @@ import { TelemetryNoticeController } from './telemetry-notice.js';
 import './bot-settings-slot.js';
 import { BotMain } from './bot-main.js';
 import { expectMobileConversation, MobileBotPanel } from './mobile-bot-panel.js';
-import { HOST_MODE_ID, hostModeClose, hostModeOpen, hostModeSwitch, registerHostMode } from './host-mode.js';
+import { HOST_MODE_ID, hostModeClose, hostModeOpen, hostModePresent, hostModeSwitch, registerHostMode } from './host-mode.js';
 import { mobileBotViewport, subscribeMobileBotViewport } from './mobile-viewport.js';
 import { clearConversationDrafts } from './conversation-draft.js';
 import { BotSidebar, createBotPanelEntry } from './bot-sidebar.js';
@@ -1049,20 +1049,28 @@ export function apply(ctx: ClientContext): void {
     };
   });
 
-  // The Bot surface has one entry point per host composition. A panel-mode host
-  // (SDKWork BirdCoder) opens it as a code-surface overlay so its standard
-  // sidebar stays beside the page; a pre-mode host selects the main panel.
-  const openHostSurface = hostModeOpen(ctx.layout);
-  const closeHostSurface = hostModeClose(ctx.layout);
+  /** Open the Bot surface the way this host frame composes it, resolved live. */
   const openBotSurface = (): void => {
-    if (openHostSurface !== undefined) openHostSurface(HOST_MODE_ID);
-    else ctx.layout.selectPanel(PANEL_ID);
+    const openPanel = hostModeOpen(ctx.layout);
+    if (openPanel !== undefined) { openPanel(HOST_MODE_ID); return; }
+    const setMode = hostModeSwitch(ctx.layout);
+    if (setMode !== undefined) { setMode(HOST_MODE_ID); return; }
+    ctx.layout.selectPanel(PANEL_ID);
   };
+  /** Close it the same way. */
   const closeBotSurface = (): void => {
-    if (closeHostSurface !== undefined) closeHostSurface();
-    else ctx.layout.selectPanel(null);
+    const closePanel = hostModeClose(ctx.layout);
+    if (closePanel !== undefined) { closePanel(); return; }
+    const setMode = hostModeSwitch(ctx.layout);
+    if (setMode !== undefined) { setMode('code'); return; }
+    ctx.layout.selectPanel(null);
   };
 
+  // A host frame gets its Bot entry from `host-mode.tsx` (`sidebar.actions`,
+  // whose click is ours). The panel row's click belongs to the host, which
+  // selects the main panel — the wrong composition beside a standard sidebar —
+  // so the row stays with the pre-mode composition only.
+  if (!hostModePresent(ctx)) {
   ctx.slots.inject('sidebar.panellist', () =>
     ctx.slots.register(
       {
@@ -1095,6 +1103,7 @@ export function apply(ctx: ClientContext): void {
       ),
     ),
   );
+  }
 
   // The Bot faces, shared by both compositions: the pre-mode main panel below
   // and the mode-based host frame's page (`host-mode.tsx`). One object so the
@@ -1120,17 +1129,18 @@ export function apply(ctx: ClientContext): void {
   };
 
   // SDKWork BirdCoder frame: contribute the Bot as a host surface — a keyed
-  // `mode.page` a panel-mode host opens beside its standard sidebar (and the
-  // keyed page content itself). Inert on a host that declares neither seat,
-  // which keeps the upstream composition below intact.
-  const hostHasModes = registerHostMode(ctx, botFaces, LOCALE_NS);
+  // `mode.page` a panel-mode host opens beside its standard sidebar, plus the
+  // rail shortcut a rail-only host shows. Both registrations are inert where the
+  // host declares neither seat, so the upstream composition below stays intact.
+  registerHostMode(ctx, botFaces, LOCALE_NS);
 
   ctx.slots.inject('main', () => {
-    // A mode-based host renders the Bot in its mode page. Registering the panel
-    // there as well would give the same surface two homes and put the code
-    // sidebar beside a surface designed to own the frame; pre-mode hosts keep
-    // the panel.
-    if (hostHasModes) return () => {};
+    // The panel stays registered in a host frame as well. Only this plugin's
+    // entry points open the overlay page, but older host glue (the panel row,
+    // the keyboard shortcut, a companion window) still calls `selectPanel` with
+    // this id; skipping the registration there threw
+    // `main panel "botharness" is not registered` and made the row look dead.
+    // A registered panel that nothing selects is inert.
     const dispose = ctx.slots.register(
       {
         name: 'main',
@@ -1155,15 +1165,13 @@ export function apply(ctx: ClientContext): void {
     return dispose;
   });
 
-  if (hostHasModes && restoreBotMode) {
-    // Restoring on a host frame reopens the overlay (or the rail mode), not the
-    // panel: selecting the panel there would reopen the code surface instead.
+  if (restoreBotMode) {
+    // Restoring reopens whichever surface this host composits: the overlay, the
+    // rail mode, or the main panel — `openBotSurface` resolves it live.
     restoreBotMode = false;
-    const setMode = hostModeSwitch(ctx.layout);
     queueMicrotask(() => {
       try {
-        if (openHostSurface !== undefined) openHostSurface(HOST_MODE_ID);
-        else setMode?.(HOST_MODE_ID);
+        openBotSurface();
       } catch (error) {
         ctx.logger.warn('botharness: failed to restore Bot mode', error);
       }
@@ -1222,8 +1230,9 @@ export function apply(ctx: ClientContext): void {
   // its own sidebar, its sidebar content, and the conversation main panel. A
   // host frame keeps its standard sidebar beside the Bot page, so none of those
   // shadows may install there — that is what kept replacing the frame's sidebar
-  // with the plugin's own.
-  if (!hostHasModes) {
+  // with the plugin's own. The answer is read live: the layout service may
+  // activate after this plugin.
+  if (!hostModePresent(ctx)) {
   registerModeShadow(
     ctx,
     'sidebar',
@@ -1275,7 +1284,7 @@ export function apply(ctx: ClientContext): void {
       ),
     store,
     {
-      enabled: () => !mobileBotViewport(),
+      enabled: () => !mobileBotViewport() && !hostModePresent(ctx),
       subscribe: subscribeMobileBotViewport,
     },
   );

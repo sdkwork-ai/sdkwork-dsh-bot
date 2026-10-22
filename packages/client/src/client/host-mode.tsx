@@ -37,6 +37,9 @@ export const HOST_MODE_ID = 'botharness';
 /** The rail shortcut sits above Settings; later shortcuts order above it. */
 const HOST_MODE_RAIL_ORDER = 20;
 
+/** The standard sidebar's quick entry: below the frame's own app entries. */
+const HOST_MODE_ACTION_ORDER = 45;
+
 /** Bot panel props the host frame hands to the surface, minus the mobile back path. */
 export type BotModeFaces = Parameters<typeof BotPanel>[0];
 
@@ -113,6 +116,19 @@ export function hostModeSeatsDeclared(ctx: { slots: unknown }): boolean {
 }
 
 /**
+ * Whether the host frame publishes navigation right now.
+ *
+ * Read live, never captured: the layout service may activate after this plugin,
+ * so an apply-time answer is not a fact about the frame. Callers that must not
+ * install pre-mode chrome ask this when they install.
+ * @param ctx - the client root context.
+ * @returns true when the layout service offers `openPanel` or `setMode`.
+ */
+export function hostModePresent(ctx: { layout?: unknown }): boolean {
+  return hostModeOpen(ctx.layout) !== undefined || hostModeSwitch(ctx.layout) !== undefined;
+}
+
+/**
  * Page frame: the center column's full box, no scroll, no outer chrome.
  *
  * `width`/`height: 100%` plus `position: relative` make this element the
@@ -171,6 +187,52 @@ export interface BotModeRailEntryInjected {
   select: () => void;
 }
 
+/** The sidebar quick entry's injected facts. */
+export interface BotSidebarActionInjected {
+  /** Open the Bot overlay page. */
+  open: () => void;
+}
+
+const actionStyle: CSSProperties = {
+  alignItems: 'center',
+  background: 'transparent',
+  borderWidth: 0,
+  borderRadius: 8,
+  color: 'inherit',
+  cursor: 'pointer',
+  display: 'flex',
+  gap: 8,
+  height: 32,
+  padding: '0 8px',
+  width: '100%',
+};
+
+/**
+ * Render the Bot entry in the frame's standard sidebar quick actions.
+ *
+ * This is the entry a panel-mode host needs: the host renders `sidebar.actions`
+ * rows itself and calls this component's opener, so the click reaches
+ * `openPanel` directly. A `sidebar.panellist` row cannot do that — the host owns
+ * its click and selects the main panel, which is a different composition.
+ * @param props - the injected opener plus the sidebar's own width and translate seats.
+ * @returns the quick entry button.
+ */
+export function BotSidebarAction(
+  props: { open: () => void; wide?: boolean | undefined; t?: ((key: string) => string) | undefined },
+): ReactElement {
+  return createElement('button', {
+    type: 'button',
+    onClick: props.open,
+    style: actionStyle,
+    'data-botharness-sidebar-action': '',
+  },
+  createElement('span', { style: { display: 'flex', flexShrink: 0 } }, BOT_GLYPH_SVG),
+  props.wide === false
+    ? null
+    : createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+      props.t?.('panel.label') ?? 'Bot'));
+}
+
 /**
  * Render the Bot rail shortcut.
  * @param props - the host's rail share (`activeMode`) plus the injected opener.
@@ -195,27 +257,25 @@ export function BotModeRailEntry(
 /**
  * Contribute the Bot surface to a mode-based host frame.
  *
- * The page registration is what a panel-mode host needs: the standard sidebar
- * opens it through `openPanel`, and the frame renders the page beside that
- * sidebar. A host that only knows rail modes additionally gets the rail
- * shortcut, so the surface stays reachable there. Both registrations are inert
- * until the host declares their seat, so a host without app modes keeps the
- * pre-mode composition this plugin already registers.
+ * Both registrations are unconditional and therefore safe on any host: a slot
+ * the host never declares ignores what is registered against it, and a surface
+ * the host cannot select is never rendered. Resolving the layout's capabilities
+ * at apply time is what made this fragile — a frame whose layout service
+ * activates after this plugin answered "no modes" and dropped the whole module.
+ * The page registration is what a panel-mode host needs; the rail shortcut
+ * makes the surface reachable on a host that only knows rail modes.
  * @param ctx - the client root context.
  * @param faces - the Bot faces the surface renders from.
  * @param localeNamespace - the plugin's locale namespace, so the surface keeps
  *   receiving its translation function from the host's locale seat.
- * @returns whether this host frame takes the mode composition, so the caller can
- *   keep the pre-mode panel out of it.
+ * @returns whether the host frame exposed its navigation at apply time; callers
+ *   must not gate reachability on it (see `hostModePresent`).
  */
 export function registerHostMode<T extends object>(
   ctx: { slots: unknown; layout?: unknown },
   faces: T,
   localeNamespace: string,
 ): boolean {
-  const setMode = hostModeSwitch(ctx.layout);
-  const openPanel = hostModeOpen(ctx.layout);
-  if ((setMode === undefined && openPanel === undefined) || !hostModeSeatsDeclared(ctx)) return false;
   const seats = ctx.slots as HostModeSeats;
   seats.inject('mode.page', () => seats.register({
     name: 'mode.page',
@@ -224,15 +284,31 @@ export function registerHostMode<T extends object>(
     // The host merges the locale share into these faces at render time.
     inject: () => faces as unknown as Record<string, unknown>,
   }, BotModePage));
-  if (openPanel === undefined) {
+  // A panel-mode host opens the surface from its sidebar row, and a rail
+  // shortcut carrying the same id makes that host drop the row as a duplicate —
+  // two entry points, one of which hides the one the frame expects. Only a host
+  // without `openPanel` needs the shortcut.
+  if (hostModeOpen(ctx.layout) === undefined) {
     seats.inject('mode.rail.panel', () => seats.register({
       name: 'mode.rail.panel',
       id: HOST_MODE_ID,
       order: HOST_MODE_RAIL_ORDER,
       inject: (): BotModeRailEntryInjected => ({
-        select: () => { setMode?.(HOST_MODE_ID); },
+        select: () => { hostModeSwitch(ctx.layout)?.(HOST_MODE_ID); },
       }),
     }, BotModeRailEntry));
+  } else {
+    // Quick entry in the standard sidebar; its click is ours, so it opens the
+    // overlay rather than selecting a main panel.
+    seats.inject('sidebar.actions', () => seats.register({
+      name: 'sidebar.actions',
+      id: HOST_MODE_ID,
+      order: HOST_MODE_ACTION_ORDER,
+      locale: localeNamespace,
+      inject: (): BotSidebarActionInjected => ({
+        open: () => { hostModeOpen(ctx.layout)?.(HOST_MODE_ID); },
+      }),
+    }, BotSidebarAction));
   }
-  return true;
+  return hostModePresent(ctx);
 }
